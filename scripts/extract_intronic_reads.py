@@ -4,7 +4,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Optional
-import json
 
 import pandas as pd
 import pysam
@@ -40,33 +39,31 @@ class ChromAndStrand(NamedTuple):
 
 
 def ignore_read(read: pysam.AlignedSegment, mapq_threshold=255) -> bool:
+    # Consider filtering by 'N' in read.cigarstring
     return True if ((read.mapping_quality < mapq_threshold) or
                     read.is_secondary or
                     read.is_supplementary or
-                    read.is_unmapped or
-                    'N' in read.cigarstring) else False
+                    read.is_unmapped) else False
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_folder',
-                        default='/cellfile/datapublic/jkoubele/celegans_mutants/intronic_reads/K002000093_54883')
+    parser.add_argument('--input_bam',
+                        default='/home/jakub/Desktop/elongation-speed-nextflow/data/BAM/K002000093_54873/Aligned.sortedByCoord.out.bam')
+    # default='/home/jakub/Desktop/elongation-speed-nextflow/data/intronic_reads/K002000093_54873_backup/intronic_reads_sorted.bam')
+    parser.add_argument('--intron_file',
+                        default='/home/jakub/Desktop/elongation-speed-nextflow/reference_genomes/WBcel235/introns.bed')
     parser.add_argument('--output_folder',
-                        default='/cellfile/datapublic/jkoubele/celegans_mutants/intronic_reads/K002000093_54883')
-    parser.add_argument('--genome_folder',
-                        default='/cellfile/datapublic/jkoubele/reference_genomes/WBcel235')
+                        default='/home/jakub/Desktop/elongation-speed-nextflow/data/intronic_reads/K002000093_54873')
+
     args = parser.parse_args()
-
-    input_folder = Path(args.input_folder)
     output_folder = Path(args.output_folder)
-    genome_folder = Path(args.genome_folder)
 
-    introns_df = pd.read_csv(genome_folder / 'introns.bed', sep='\t',
+    introns_df = pd.read_csv(args.intron_file, sep='\t',
                              names=['chromosome', 'start', 'end', 'name', 'score', 'strand'])
 
     print(f"{introns_df.head()=}")
 
-    sample_name = input_folder.name
     output_folder.mkdir(exist_ok=True, parents=True)
 
     introns_by_chrom_and_strand: dict[ChromAndStrand, list[Intron]] = defaultdict(list)
@@ -87,35 +84,39 @@ if __name__ == "__main__":
     introns_by_chrom_and_strand = {key: sorted(value, key=lambda x: x.start) for
                                    key, value in introns_by_chrom_and_strand.items()}
 
-    # TO-DO: here we assume that introns are not overlapping. We should explicitely check for that and either raise error, or handle it as a specific case
+    # TO-DO: here we assume that introns are not overlapping.
+    # We should explicitely check for that and either raise error, or handle it as a specific case.
     intron_starts_by_chrom_and_strand = {key: [intron.start for intron in value] for
                                          key, value in introns_by_chrom_and_strand.items()}
     intron_ends_by_chrom_and_strand = {key: [intron.end for intron in value] for
                                        key, value in introns_by_chrom_and_strand.items()}
 
-    intronic_read_positions = {intron: {'read_starts': [],
-                                        'read_ends': [],
-                                        'read_midpoint_as_5p_to_3p_fractions': []}
-                               for intron in all_introns}
-
     # input_bam_path = input_folder / 'Aligned.sortedByCoord.out.bam'
-    input_bam_path = input_folder / 'intronic_reads_sorted.bam'
     output_unsorted_bam_path = output_folder / 'intronic_reads_unsorted.bam'
     output_sorted_bam_path = output_folder / 'intronic_reads_sorted.bam'
+    output_bed_plus_strand_path = Path(output_folder / 'intronic_reads_plus_strand.bed')
+    output_bed_minus_strand_path = Path(output_folder / 'intronic_reads_minus_strand.bed')
 
-    print(f"{list(input_folder.iterdir())=}")
+    bam_input = pysam.AlignmentFile(Path(args.input_bam), "rb")
 
-    bam_input = pysam.AlignmentFile(input_bam_path, "rb")
+    # TODO: move to arguments
     paired_sequencing = True
     strandendess_type = "2"  # either '1' or '2', eligible for paired sequencing only
-    overlap_bp_threshold = 20
+    overlap_bp_threshold = 5
     create_bam_output = True
-    create_json_output = True
+    create_bed_output = True
 
     assert strandendess_type in ['1', '2']
 
     if create_bam_output:
         bam_output = pysam.AlignmentFile(output_unsorted_bam_path, "wb", template=bam_input)
+
+    if create_bed_output:
+        open(output_bed_plus_strand_path, 'w').close()  # Create empty files to append on
+        bed_output_plus_strand = open(output_bed_plus_strand_path, 'a')
+
+        open(output_bed_minus_strand_path, 'w').close()
+        bed_output_minus_strand = open(output_bed_minus_strand_path, 'a')
 
     if paired_sequencing:
         reads_1: dict[str, pysam.AlignedSegment] = {}
@@ -142,8 +143,6 @@ if __name__ == "__main__":
                 assert False, 'Inconsistent detection of paired reads'
 
             if read_1.reference_name != read_2.reference_name:
-                print(f"{read_1=}")
-                print(f"{read_2=}")
                 assert False, 'Paired reads aligned to different chromosomes'
 
             if strandendess_type == '1':
@@ -164,15 +163,12 @@ if __name__ == "__main__":
                 continue  # for a case that no introns are present on given contig, e.g. for MtDNA
             aligned_blocks = py_interval(*(
                 alignment.read_1.get_blocks() if alignment.read_2 is None else alignment.read_1.get_blocks() + alignment.read_2.get_blocks()))
-            intron_list = introns_by_chrom_and_strand[ChromAndStrand(alignment.chromosome, alignment.strand)]
+
             intron_starts = intron_starts_by_chrom_and_strand[ChromAndStrand(alignment.chromosome, alignment.strand)]
             intron_ends = intron_ends_by_chrom_and_strand[ChromAndStrand(alignment.chromosome, alignment.strand)]
 
             alignment_start = aligned_blocks[0][0]
             alignment_end = aligned_blocks[-1][1]
-
-            if (alignment_end - alignment_start) > 300:
-                continue
 
             intron_index_lower_bound = bisect.bisect_left(intron_ends, alignment_start)
             intron_index_upper_bound = bisect.bisect_right(intron_starts, alignment_end)
@@ -184,22 +180,20 @@ if __name__ == "__main__":
 
                 if overlap_length >= overlap_bp_threshold:
                     aligned_to_intron = True
-                    # intronic_read_positions[intron]['read_starts'].append(alignment_start)
-                    # intronic_read_positions[intron]['read_ends'].append(alignment_end)
-                    midpoint_genomic_location = (alignment_start + alignment_end) // 2
-                    midpoint_genomic_location = min(max(intron.start, midpoint_genomic_location), intron.end)
-                    intron_length = intron.end - intron.start
-                    read_midpoint_as_5p_to_3p_fraction = ((
-                                                                      midpoint_genomic_location - intron.start) / intron_length) if intron.strand == '+' else (
-                            (intron.end - midpoint_genomic_location) / intron_length)
-                    intronic_read_positions[intron]['read_midpoint_as_5p_to_3p_fractions'].append(
-                        read_midpoint_as_5p_to_3p_fraction)
+                    # TODO" handle intron-specific alignment processing. e.g. counting
 
             if aligned_to_intron:
                 if create_bam_output:
                     bam_output.write(alignment.read_1)
                     if alignment.read_2 is not None:
                         bam_output.write(alignment.read_2)
+                if create_bed_output:
+                    for block in aligned_blocks:
+                        if alignment.strand == '+':
+                            bed_output_plus_strand.write(f"{alignment.chromosome}\t{int(block[0])}\t{int(block[1])}\n")
+                        elif alignment.strand == '-':
+                            bed_output_minus_strand.write(f"{alignment.chromosome}\t{int(block[0])}\t{int(block[1])}\n")
+
 
 
     else:
@@ -209,12 +203,12 @@ if __name__ == "__main__":
                                   read_1=read)
 
     bam_input.close()
-    bam_output.close()
 
-    intronic_read_positions_output = [[key.to_json_dict(), value] for key, value in intronic_read_positions.items()]
-
-    with open(output_folder / 'read_positions.json', 'w') as out_file:
-        json.dump(intronic_read_positions_output, out_file)
-
-    pysam.sort("-o", str(output_sorted_bam_path), str(output_unsorted_bam_path), catch_stdout=False)
-    output_unsorted_bam_path.unlink()
+    if create_bam_output:
+        pysam.sort("-o", str(output_sorted_bam_path), str(output_unsorted_bam_path), catch_stdout=False)
+        pysam.index(str(output_sorted_bam_path))
+        output_unsorted_bam_path.unlink()
+        bam_output.close()
+    if create_bed_output:
+        bed_output_plus_strand.close()
+        bed_output_minus_strand.close()
