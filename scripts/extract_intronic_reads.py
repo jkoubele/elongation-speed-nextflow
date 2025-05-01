@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Optional
+import json
 
 import pandas as pd
 import pysam
@@ -26,6 +27,12 @@ class Intron(NamedTuple):
     end: int
     interval: py_interval
 
+    def to_json_dict(self) -> dict:
+        return {'chromosome': self.chromosome,
+                'strand': self.strand,
+                'start': self.start,
+                'end': self.end}
+
 
 class ChromAndStrand(NamedTuple):
     chromosome: str
@@ -36,7 +43,8 @@ def ignore_read(read: pysam.AlignedSegment, mapq_threshold=255) -> bool:
     return True if ((read.mapping_quality < mapq_threshold) or
                     read.is_secondary or
                     read.is_supplementary or
-                    read.is_unmapped) else False
+                    read.is_unmapped or
+                    'N' in read.cigarstring) else False
 
 
 if __name__ == "__main__":
@@ -62,6 +70,7 @@ if __name__ == "__main__":
     output_folder.mkdir(exist_ok=True, parents=True)
 
     introns_by_chrom_and_strand: dict[ChromAndStrand, list[Intron]] = defaultdict(list)
+    all_introns: list[Intron] = []
     for chromosome, strand, start, end in zip(introns_df['chromosome'],
                                               introns_df['strand'],
                                               introns_df['start'],
@@ -73,14 +82,24 @@ if __name__ == "__main__":
                         interval=py_interval([start, end]))
         introns_by_chrom_and_strand[ChromAndStrand(chromosome=intron.chromosome,
                                                    strand=intron.strand)].append(intron)
+        all_introns.append(intron)
 
+    introns_by_chrom_and_strand = {key: sorted(value, key=lambda x: x.start) for
+                                   key, value in introns_by_chrom_and_strand.items()}
+
+    # TO-DO: here we assume that introns are not overlapping. We should explicitely check for that and either raise error, or handle it as a specific case
     intron_starts_by_chrom_and_strand = {key: [intron.start for intron in value] for
                                          key, value in introns_by_chrom_and_strand.items()}
     intron_ends_by_chrom_and_strand = {key: [intron.end for intron in value] for
                                        key, value in introns_by_chrom_and_strand.items()}
 
+    intronic_read_positions = {intron: {'read_starts': [],
+                                        'read_ends': [],
+                                        'read_midpoint_as_5p_to_3p_fractions': []}
+                               for intron in all_introns}
+
     # input_bam_path = input_folder / 'Aligned.sortedByCoord.out.bam'
-    input_bam_path = input_folder / 'downsampled.bam'
+    input_bam_path = input_folder / 'intronic_reads_sorted.bam'
     output_unsorted_bam_path = output_folder / 'intronic_reads_unsorted.bam'
     output_sorted_bam_path = output_folder / 'intronic_reads_sorted.bam'
 
@@ -89,7 +108,7 @@ if __name__ == "__main__":
     bam_input = pysam.AlignmentFile(input_bam_path, "rb")
     paired_sequencing = True
     strandendess_type = "2"  # either '1' or '2', eligible for paired sequencing only
-    overlap_bp_threshold = 5
+    overlap_bp_threshold = 20
     create_bam_output = True
     create_json_output = True
 
@@ -152,6 +171,9 @@ if __name__ == "__main__":
             alignment_start = aligned_blocks[0][0]
             alignment_end = aligned_blocks[-1][1]
 
+            if (alignment_end - alignment_start) > 300:
+                continue
+
             intron_index_lower_bound = bisect.bisect_left(intron_ends, alignment_start)
             intron_index_upper_bound = bisect.bisect_right(intron_starts, alignment_end)
 
@@ -162,6 +184,17 @@ if __name__ == "__main__":
 
                 if overlap_length >= overlap_bp_threshold:
                     aligned_to_intron = True
+                    # intronic_read_positions[intron]['read_starts'].append(alignment_start)
+                    # intronic_read_positions[intron]['read_ends'].append(alignment_end)
+                    midpoint_genomic_location = (alignment_start + alignment_end) // 2
+                    midpoint_genomic_location = min(max(intron.start, midpoint_genomic_location), intron.end)
+                    intron_length = intron.end - intron.start
+                    read_midpoint_as_5p_to_3p_fraction = ((
+                                                                      midpoint_genomic_location - intron.start) / intron_length) if intron.strand == '+' else (
+                            (intron.end - midpoint_genomic_location) / intron_length)
+                    intronic_read_positions[intron]['read_midpoint_as_5p_to_3p_fractions'].append(
+                        read_midpoint_as_5p_to_3p_fraction)
+
             if aligned_to_intron:
                 if create_bam_output:
                     bam_output.write(alignment.read_1)
@@ -177,6 +210,11 @@ if __name__ == "__main__":
 
     bam_input.close()
     bam_output.close()
+
+    intronic_read_positions_output = [[key.to_json_dict(), value] for key, value in intronic_read_positions.items()]
+
+    with open(output_folder / 'read_positions.json', 'w') as out_file:
+        json.dump(intronic_read_positions_output, out_file)
 
     pysam.sort("-o", str(output_sorted_bam_path), str(output_unsorted_bam_path), catch_stdout=False)
     output_unsorted_bam_path.unlink()
