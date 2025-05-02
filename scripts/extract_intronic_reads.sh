@@ -2,6 +2,7 @@
 
 #SBATCH --job-name=extract_intronic_reads
 #SBATCH --ntasks=3
+#SBATCH --mem=20G
 
 # Function to display usage information
 usage() {
@@ -58,23 +59,19 @@ if ! docker images --format "{{.Repository}}" | grep -q "^bioinfo_tools$"; then
     docker load -i "$docker_image_path"
 fi
 
-echo "SHELL DOCKER WRAPPER DEBUG: Output folder=$output_folder"$
-echo "SHELL DOCKER WRAPPER DEBUG: Input folder=$input_folder"$
-ls "$output_folder"
-ls "$input_folder"
 # Create output folder if it doesn't exist
 mkdir "$output_folder" -p
 
 # Run docker with script extracting the intronic reads
-echo "DEBUG: Running docker"
+
 docker run --rm \
--v "$(realpath "$input_folder")":/input_folder \
+-v "$input_folder":/input_folder \
 -v "$output_folder":/output_folder \
 -v "$genome_folder":/genome_folder \
 -v "$script_folder":/script_folder \
 --security-opt seccomp=unconfined \
-bioinfo_tools /bin/sh -c "ls /; ls /input_folder; python3 /script_folder/extract_intronic_reads.py \
---input_folder /input_folder \
---output_folder /output_folder \
---genome_folder /genome_folder; \
+bioinfo_tools /bin/sh -c "python3 /script_folder/extract_intronic_reads.py \
+--input_bam /input_folder/Aligned.sortedByCoord.out.bam \
+--intron_file /genome_folder/introns_filtered.bed \
+--output_folder /output_folder; \
 chmod 777 -R /output_folder"

@@ -13,7 +13,7 @@ repository_path="$(dirname "$script_directory")"
 input_folder=""
 output_folder=""
 genome_folder=""
-docker_image_path="/data/public/jkoubele/pol-II-analysis/docker_images/bioinfo_tools.tar"
+docker_image_path="$repository_path"/docker_images/bioinfo_tools.tar
 slurm_log_folder="$repository_path"/slurm_logs
 
 # Parse command line arguments

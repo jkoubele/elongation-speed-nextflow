@@ -20,6 +20,7 @@ class Alignment:
 
 
 class Intron(NamedTuple):
+    name: str
     chromosome: str
     strand: str
     start: int
@@ -49,12 +50,12 @@ def ignore_read(read: pysam.AlignedSegment, mapq_threshold=255) -> bool:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_bam',
-                        default='/home/jakub/Desktop/elongation-speed-nextflow/data/BAM/K002000093_54873/Aligned.sortedByCoord.out.bam')
+                        default='/cellfile/datapublic/jkoubele/celegans_mutants/BAM/K002000093_54873/Aligned.sortedByCoord.out.bam')
     # default='/home/jakub/Desktop/elongation-speed-nextflow/data/intronic_reads/K002000093_54873_backup/intronic_reads_sorted.bam')
     parser.add_argument('--intron_file',
-                        default='/home/jakub/Desktop/elongation-speed-nextflow/reference_genomes/WBcel235/introns.bed')
+                        default='/cellfile/datapublic/jkoubele/reference_genomes/WBcel235/introns_filtered.bed')
     parser.add_argument('--output_folder',
-                        default='/home/jakub/Desktop/elongation-speed-nextflow/data/intronic_reads/K002000093_54873')
+                        default='/cellfile/datapublic/jkoubele/elongation-speed-nextflow/data/intronic_reads/K002000093_54873')
 
     args = parser.parse_args()
     output_folder = Path(args.output_folder)
@@ -62,17 +63,17 @@ if __name__ == "__main__":
     introns_df = pd.read_csv(args.intron_file, sep='\t',
                              names=['chromosome', 'start', 'end', 'name', 'score', 'strand'])
 
-    print(f"{introns_df.head()=}")
-
     output_folder.mkdir(exist_ok=True, parents=True)
 
     introns_by_chrom_and_strand: dict[ChromAndStrand, list[Intron]] = defaultdict(list)
     all_introns: list[Intron] = []
-    for chromosome, strand, start, end in zip(introns_df['chromosome'],
-                                              introns_df['strand'],
-                                              introns_df['start'],
-                                              introns_df['end']):
-        intron = Intron(chromosome=chromosome,
+    for name, chromosome, strand, start, end in zip(introns_df['name'],
+                                                    introns_df['chromosome'],
+                                                    introns_df['strand'],
+                                                    introns_df['start'],
+                                                    introns_df['end']):
+        intron = Intron(name=name,
+                        chromosome=chromosome,
                         strand=strand,
                         start=start,
                         end=end,
@@ -81,10 +82,11 @@ if __name__ == "__main__":
                                                    strand=intron.strand)].append(intron)
         all_introns.append(intron)
 
+    read_counts = {intron.name: 0 for intron in all_introns}
     introns_by_chrom_and_strand = {key: sorted(value, key=lambda x: x.start) for
                                    key, value in introns_by_chrom_and_strand.items()}
 
-    # TO-DO: here we assume that introns are not overlapping.
+    # TODO: here we assume that introns are not overlapping.
     # We should explicitely check for that and either raise error, or handle it as a specific case.
     intron_starts_by_chrom_and_strand = {key: [intron.start for intron in value] for
                                          key, value in introns_by_chrom_and_strand.items()}
@@ -180,7 +182,7 @@ if __name__ == "__main__":
 
                 if overlap_length >= overlap_bp_threshold:
                     aligned_to_intron = True
-                    # TODO" handle intron-specific alignment processing. e.g. counting
+                    read_counts[intron.name] += 1
 
             if aligned_to_intron:
                 if create_bam_output:
@@ -194,9 +196,7 @@ if __name__ == "__main__":
                         elif alignment.strand == '-':
                             bed_output_minus_strand.write(f"{alignment.chromosome}\t{int(block[0])}\t{int(block[1])}\n")
 
-
-
-    else:
+    elif not paired_sequencing:
         for read in bam_input:
             alignment = Alignment(chromosome=read.reference_name,
                                   strand='+' if read.is_forward else '-',
@@ -204,11 +204,15 @@ if __name__ == "__main__":
 
     bam_input.close()
 
+    introns_df = introns_df.set_index('name', drop=False).drop(columns=['score'])
+    introns_df['count'] = pd.Series(read_counts)
+    introns_df.to_csv(output_folder / 'intron_read_counts.tsv', sep='\t', index=False)
+
     if create_bam_output:
+        bam_output.close()
         pysam.sort("-o", str(output_sorted_bam_path), str(output_unsorted_bam_path), catch_stdout=False)
         pysam.index(str(output_sorted_bam_path))
         output_unsorted_bam_path.unlink()
-        bam_output.close()
     if create_bed_output:
         bed_output_plus_strand.close()
         bed_output_minus_strand.close()

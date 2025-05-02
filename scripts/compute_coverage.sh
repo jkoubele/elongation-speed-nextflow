@@ -1,24 +1,24 @@
 usage() {
-    echo "Usage: $0 -b <bed_file> -f <fai_file> -o <output_folder>"
+    echo "Usage: $0 -i <input_folder> -o <output_folder> -f <fai_file>"
     exit 1
 }
 
 # Variables to hold argument
-bed_file=""
+input_folder=""
 fai_file=""
 output_folder=""
 
 # Parse command line argument
 while getopts ":f:" opt; do
     case ${opt} in
-        f )
-            fai_file_name=$OPTARG
+        i )
+            input_folder=$OPTARG
+            ;;
+        o )
+            output_folder=$OPTARG
             ;;
         f )
-            fai_file_name=$OPTARG
-            ;;
-        f )
-            fai_file_name=$OPTARG
+            fai_file=$OPTARG
             ;;
         \? )
             echo "Invalid option: $OPTARG" 1>&2
@@ -31,22 +31,21 @@ while getopts ":f:" opt; do
     esac
 done
 
-bed_file="/home/jakub/Desktop/elongation-speed-nextflow/data/intronic_reads/K002000093_54873/intronic_reads_plus_strand.bed"
-fai_file="/home/jakub/Desktop/elongation-speed-nextflow/reference_genomes/WBcel235/Caenorhabditis_elegans.WBcel235.dna.toplevel.fa.fai"
-output_folder="/home/jakub/Desktop/elongation-speed-nextflow/data/intronic_reads/K002000093_54873"
+input_folder="/cellfile/datapublic/jkoubele/elongation-speed-nextflow/data/intronic_reads/K002000093_54873"
+fai_file="/cellfile/datapublic/jkoubele/reference_genomes/WBcel235/Caenorhabditis_elegans.WBcel235.dna.toplevel.fa.fai"
+output_folder="/cellfile/datapublic/jkoubele/elongation-speed-nextflow/data/intronic_coverage/K002000093_54873"
 
-filename=$(basename "$bed_file")
-filename="${filename%.*}"
-echo "$filename"
+# Create output folder if it doesn't exist
+mkdir "$output_folder" -p
 
-# Check if mandatory argument is provided
-if [ -z "$fai_file" ]; then
-    echo "Error: Missing mandatory argument"
-    usage
-fi
+sort -k 1,1 -k 2,2n $input_folder/intronic_reads_plus_strand.bed > $output_folder/intronic_reads_plus_strand_sorted.bed
+bedtools genomecov -bga -split -i $output_folder/intronic_reads_plus_strand_sorted.bed -g $fai_file > \
+$output_folder/coverage_plus_strand.bedGraph
+gzip -f $output_folder/coverage_plus_strand.bedGraph
+gzip -f $output_folder/intronic_reads_plus_strand_sorted.bed
 
-
-sort -k 1,1 -k 2,2n $bed_file > $output_folder/"${filename}"_sorted.bed
-bedtools genomecov -bga -split -i $output_folder/"${filename}"_sorted.bed -g $fai_file > \
-/$output_folder/coverage_"${filename}".bedGraph
-gzip $output_folder/"${filename}"_sorted.bed
+sort -k 1,1 -k 2,2n $input_folder/intronic_reads_minus_strand.bed > $output_folder/intronic_reads_minus_strand_sorted.bed
+bedtools genomecov -bga -split -i $output_folder/intronic_reads_minus_strand_sorted.bed -g $fai_file > \
+$output_folder/coverage_minus_strand.bedGraph
+gzip -f $output_folder/coverage_minus_strand.bedGraph
+gzip -f $output_folder/intronic_reads_minus_strand_sorted.bed

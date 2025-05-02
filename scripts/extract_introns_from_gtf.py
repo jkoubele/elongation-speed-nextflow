@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from collections import defaultdict
 
 import pandas as pd
 from pybedtools import BedTool, Interval
@@ -48,6 +49,15 @@ def extract_genomic_features(genome_folder: Path, gtf_file_name: str, gtf_source
                        for x in tqdm(introns)])
     introns = introns.merge(s=True, c=[4, 5, 6], o='distinct').sort()
 
+    introns_filtered: list[Interval] = []
+    gene_occurances = defaultdict(int)
+    for intron in tqdm(introns, desc="Filtering introns"):
+        if ',' not in intron.name:  # ignoring introns mapped to more than 1 gene
+            gene_occurances[intron.name] += 1
+            intron.name = f"{intron.name}_{gene_occurances[intron.name]}"
+            introns_filtered.append(intron)
+
+    BedTool(introns_filtered).saveas(genome_folder / 'introns_filtered.bed')
     genes.saveas(genome_folder / 'genes.bed')
     exons.saveas(genome_folder / 'exons.bed')
     introns.saveas(genome_folder / 'introns.bed')
