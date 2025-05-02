@@ -9,7 +9,7 @@ fai_file=""
 output_folder=""
 
 # Parse command line argument
-while getopts ":f:" opt; do
+while getopts "i:o:f:" opt; do
     case ${opt} in
         i )
             input_folder=$OPTARG
@@ -31,9 +31,14 @@ while getopts ":f:" opt; do
     esac
 done
 
-input_folder="/cellfile/datapublic/jkoubele/elongation-speed-nextflow/data/intronic_reads/K002000093_54873"
-fai_file="/cellfile/datapublic/jkoubele/reference_genomes/WBcel235/Caenorhabditis_elegans.WBcel235.dna.toplevel.fa.fai"
-output_folder="/cellfile/datapublic/jkoubele/elongation-speed-nextflow/data/intronic_coverage/K002000093_54873"
+#input_folder="/cellfile/datapublic/jkoubele/elongation-speed-nextflow/data/intronic_reads/K002000093_54873"
+#fai_file="/cellfile/datapublic/jkoubele/reference_genomes/WBcel235/Caenorhabditis_elegans.WBcel235.dna.toplevel.fa.fai"
+#output_folder="/cellfile/datapublic/jkoubele/elongation-speed-nextflow/data/intronic_coverage/K002000093_54873"
+
+if [ -z "$input_folder" ] || [ -z "$output_folder" ] || [ -z "$fai_file" ]; then
+    echo "Error: Missing mandatory arguments"
+    usage
+fi
 
 # Create output folder if it doesn't exist
 mkdir "$output_folder" -p
